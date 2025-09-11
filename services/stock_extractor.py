@@ -213,20 +213,9 @@ class StockExtractor:
         print("Stock list refreshed from database")
     
     def extract_important_sentences(self, text: str, stock_codes: List[str]) -> Dict[str, str]:
-        """
-        Trích xuất câu quan trọng chứa mã chứng khoán
-        
-        Args:
-            text: Văn bản gốc
-            stock_codes: Danh sách mã chứng khoán đã trích xuất
-            
-        Returns:
-            Dict với key là mã chứng khoán, value là câu quan trọng
-        """
         if not text or not stock_codes:
             return {}
         
-        # Tách văn bản thành các câu
         sentences = self._split_into_sentences(text)
         
         important_sentences = {}
@@ -293,11 +282,9 @@ class StockExtractor:
             if keyword in sentence_lower:
                 score += 1.0
         
-        # Ưu tiên câu chứa số (thường có thông tin cụ thể)
         if re.search(r'\d', sentence):
             score += 0.5
-        
-        # Ưu tiên câu có mã chứng khoán ở vị trí quan trọng
+
         if sentence.startswith(stock_code) or stock_code in sentence.split()[:3]:
             score += 1.0
         

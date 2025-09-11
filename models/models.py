@@ -23,6 +23,7 @@ def create_summary_table():
                 content_tom_tat TEXT,
                 ma_chung_khoan VARCHAR(10),
                 cau_quan_trong TEXT,
+                confidence_score FLOAT DEFAULT 0.5,
                 cam_xuc VARCHAR(20),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -72,6 +73,7 @@ def create_reply_summary_table():
                 rely_summary TEXT,
                 stock_id VARCHAR(10),
                 cau_quan_trong TEXT,
+                confidence_score FLOAT DEFAULT 0.5,
                 cam_xuc VARCHAR(20),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(reply_id, stock_id)

@@ -70,18 +70,21 @@ def process_posts_batch(batch_size=20):
                     for stock_code in stock_codes:
                         important_sentence = important_sentences.get(stock_code, "")
                         
-                        # Phân tích cảm xúc của câu quan trọng
+                        # Phân tích cảm xúc của câu quan trọng bằng PhoBERT
                         sentiment = "TRUNG_TINH" 
+                        confidence = 0.5
+                        
                         if important_sentence:
                             sentiment_result = sentiment_analyzer.analyze_sentiment(important_sentence)
                             sentiment = sentiment_result["normalized_sentiment"]
+                            confidence = sentiment_result["score"]
                         
                         cur.execute("""
                             INSERT INTO post_summary 
-                            (post_id, content_tom_tat, ma_chung_khoan, cau_quan_trong, cam_xuc)
-                            VALUES (%s, %s, %s, %s, %s)
-                        """, (post_id, summary, stock_code, important_sentence, sentiment))
-                        print(f"Processed: {post_id} - Stock: {stock_code} - Sentiment: {sentiment}")
+                            (post_id, content_tom_tat, ma_chung_khoan, cau_quan_trong, cam_xuc, confidence_score)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (post_id, summary, stock_code, important_sentence, sentiment, confidence))
+                        print(f"Processed: {post_id} - Stock: {stock_code} - Sentiment: {sentiment} - Confidence: {confidence:.2f}")
                 
                 process_replies_for_post(post_id, summarizer, stock_extractor, sentiment_analyzer)
                 
@@ -168,24 +171,25 @@ def process_replies_for_post(post_id, summarizer, stock_extractor, sentiment_ana
                     """, (reply_id, post_id, reply_summary, None, None, "TRUNG_TINH"))
                     print(f"Processed reply: {reply_id} - No stock codes")
                 else:
-                    # Trích xuất câu quan trọng cho mỗi mã chứng khoán
                     important_sentences = stock_extractor.extract_important_sentences(reply_content, stock_codes)
                     
                     for stock_code in stock_codes:
                         important_sentence = important_sentences.get(stock_code, "")
                         
-                        # Phân tích cảm xúc của câu quan trọng
-                        sentiment = "TRUNG_TINH"  # Mặc định
+                        sentiment = "TRUNG_TINH"  
+                        confidence = 0.5
+                        
                         if important_sentence:
                             sentiment_result = sentiment_analyzer.analyze_sentiment(important_sentence)
                             sentiment = sentiment_result["normalized_sentiment"]
+                            confidence = sentiment_result["score"]
                         
                         cur.execute("""
                             INSERT INTO reply_summary 
-                            (reply_id, post_id, rely_summary, stock_id, cau_quan_trong, cam_xuc)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                        """, (reply_id, post_id, reply_summary, stock_code, important_sentence, sentiment))
-                        print(f"Processed reply: {reply_id} - Stock: {stock_code} - Sentiment: {sentiment}")
+                            (reply_id, post_id, rely_summary, stock_id, cau_quan_trong, cam_xuc, confidence_score)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """, (reply_id, post_id, reply_summary, stock_code, important_sentence, sentiment, confidence))
+                        print(f"Processed reply: {reply_id} - Stock: {stock_code} - Sentiment: {sentiment} - Confidence: {confidence:.2f}")
                 
                 reply_count += 1
                 

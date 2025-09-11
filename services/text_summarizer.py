@@ -108,11 +108,9 @@ class TextSummarizer:
         """Xử lý hậu kỳ cho bản tóm tắt"""
         summary = re.sub(r'\b(vietnews|tóm tắt|summary):?\s*', '', summary, flags=re.IGNORECASE)
         
-        # Đảm bảo summary không quá ngắn
         if len(summary.split()) < 5:
             return self._smart_summary(original_text, 100)
         
-        # Đảm bảo kết thúc bằng dấu câu
         if not summary.endswith(('.', '!', '?')):
             summary = summary.rstrip() + '.'
         
@@ -171,30 +169,25 @@ class TextSummarizer:
             sentence = sentence.strip()
             word_count = len(sentence.split())
             
-            # Bỏ qua câu quá ngắn hoặc quá dài
             if word_count < 5 or word_count > 50:
                 continue
                 
             score = 0
             
-            # Ưu tiên câu đầu (thường là câu chủ đề)
             if i == 0:
                 score += 3
-            elif i < 3:  # 3 câu đầu
+            elif i < 3: 
                 score += 1
             
-            # Ưu tiên câu chứa từ khóa quan trọng
             sentence_lower = sentence.lower()
             for keyword in important_keywords:
                 if keyword in sentence_lower:
                     score += 2
                     break
             
-            # Ưu tiên câu chứa số (thường có thông tin quan trọng)
             if re.search(r'\d', sentence):
                 score += 1
             
-            # Ưu tiên câu có độ dài vừa phải
             if 8 <= word_count <= 25:
                 score += 1
             
