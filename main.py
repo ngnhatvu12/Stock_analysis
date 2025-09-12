@@ -216,26 +216,22 @@ def process_replies_for_post(post_id, summarizer, stock_extractor, sentiment_ana
         conn.close()
 
 def main():
-    """Hàm main chạy liên tục"""
-    batch_size = 10  
-    
-    while True:
-        try:
-            print(f"\n{datetime.now()} - Starting new batch processing...")
-            processed = process_posts_batch(batch_size)
+    """Hàm main chạy một lần"""
+    try:
+        print(f"\n{datetime.now()} - Starting batch processing...")
+        processed = process_posts_batch(batch_size=1000)  
+        
+        if processed == 0:
+            print("No posts to process.")
+        else:
+            print(f"Successfully processed {processed} posts.")
             
-            if processed == 0:
-                print("No more posts to process. Waiting 60 seconds...")
-                time.sleep(60)
-            else:
-                time.sleep(10)
-                
-        except KeyboardInterrupt:
-            print("\nProcess interrupted by user. Exiting...")
-            break
-        except Exception as e:
-            print(f"Unexpected error in main loop: {e}")
-            time.sleep(120)
+    except Exception as e:
+        print(f"Error in processing: {e}")
+        return 1
+    
+    return 0
+    
 
 if __name__ == "__main__":
     main()

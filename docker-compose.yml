@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  post-processor:
+    build: .
+    container_name: post_processor_scheduler
+    restart: unless-stopped
+    environment:
+      - DB_HOST=${DB_HOST}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_PORT=${DB_PORT}
+      - HUGGINGFACE_API_KEY=${HUGGINGFACE_API_KEY}
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
