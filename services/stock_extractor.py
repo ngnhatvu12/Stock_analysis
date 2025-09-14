@@ -213,35 +213,48 @@ class StockExtractor:
         print("Stock list refreshed from database")
     
     def extract_important_sentences(self, text: str, stock_codes: List[str]) -> Dict[str, str]:
-        if not text or not stock_codes:
+        if not text:
             return {}
-        
+    
         sentences = self._split_into_sentences(text)
-        
+    
         important_sentences = {}
-        
-        for stock_code in stock_codes:
+    
+    # Nếu có mã chứng khoán, tìm câu chứa mã chứng khoán
+        if stock_codes:
+            for stock_code in stock_codes:
             # Tìm câu chứa mã chứng khoán
-            stock_sentences = []
+                stock_sentences = []
             
-            for sentence in sentences:
-                if re.search(rf'\b{stock_code}\b', sentence, re.IGNORECASE):
-                    stock_sentences.append(sentence)
+                for sentence in sentences:
+                    if re.search(rf'\b{stock_code}\b', sentence, re.IGNORECASE):
+                        stock_sentences.append(sentence)
             
             # Nếu có nhiều câu, chọn câu quan trọng nhất
-            if stock_sentences:
-                if len(stock_sentences) == 1:
-                    important_sentences[stock_code] = stock_sentences[0]
-                else:
+                if stock_sentences:
+                    if len(stock_sentences) == 1:
+                        important_sentences[stock_code] = stock_sentences[0]
+                    else:
                     # Chọn câu có độ dài hợp lý và chứa từ khóa quan trọng
-                    scored_sentences = []
-                    for sentence in stock_sentences:
-                        score = self._score_sentence_importance(sentence, stock_code)
-                        scored_sentences.append((sentence, score))
+                        scored_sentences = []
+                        for sentence in stock_sentences:
+                            score = self._score_sentence_importance(sentence, stock_code)
+                            scored_sentences.append((sentence, score))
                     
-                    scored_sentences.sort(key=lambda x: x[1], reverse=True)
-                    important_sentences[stock_code] = scored_sentences[0][0]
-        
+                        scored_sentences.sort(key=lambda x: x[1], reverse=True)
+                        important_sentences[stock_code] = scored_sentences[0][0]
+        else:
+        # Nếu không có mã chứng khoán, chọn câu quan trọng nhất toàn bài
+            if sentences:
+                scored_sentences = []
+                for sentence in sentences:
+                    score = self._score_sentence_importance(sentence, "")
+                    scored_sentences.append((sentence, score))
+            
+                scored_sentences.sort(key=lambda x: x[1], reverse=True)
+                if scored_sentences:
+                    important_sentences["GENERAL"] = scored_sentences[0][0]
+    
         return important_sentences
     
     def _split_into_sentences(self, text: str) -> List[str]:
