@@ -1,2 +1,4 @@
 .env
 .env.docker
+training_data.jsonl
+trained_sentiment_model/

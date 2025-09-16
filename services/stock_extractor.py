@@ -1,10 +1,19 @@
 import re
+import os
 from typing import List, Set, Dict, Any
 import time
-from transformers import pipeline, AutoTokenizer, AutoModelForTokenClassification
+from transformers import pipeline, AutoTokenizer, AutoModelForTokenClassification, AutoModelForSeq2SeqLM
 import torch
 import psycopg2
 from config.database import get_db_connection
+from summa import summarizer as textrank_summarizer
+import nltk
+from nltk.tokenize import sent_tokenize
+
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
 
 class StockExtractor:
     def __init__(self):
@@ -14,8 +23,13 @@ class StockExtractor:
         self._cache_size = 1000      
         self.ner_model = None
         self.tokenizer = None
-        self._init_ai_model()     
+        self.summarization_model = None
         self.vietnamese_stocks = self._load_stocks_from_db()
+        self._init_ai_model()
+        
+        # Sử dụng NLTK thay thế cho VnCoreNLP
+        print("Using NLTK for sentence splitting")
+        self.rdrsegmenter = None
     
     def _load_stocks_from_db(self) -> Set[str]:
         conn = None
@@ -39,10 +53,10 @@ class StockExtractor:
     
     def _init_ai_model(self):
         try:
-            print("Loading AI model for stock recognition...")
+            print("Loading AI models for stock recognition and summarization...")
             
+            # Model nhận diện thực thể (giữ nguyên)
             model_name = "Davlan/bert-base-multilingual-cased-ner-hrl"
-            
             self.ner_model = pipeline(
                 "ner",
                 model=model_name,
@@ -50,11 +64,18 @@ class StockExtractor:
                 aggregation_strategy="simple",
                 device=-1 
             )
-            print("AI model loaded successfully!")
+            
+            # Thêm model summarization cho tiếng Việt
+            summarization_model_name = "VietAI/vit5-base-vietnews-summarization"
+            self.summarization_tokenizer = AutoTokenizer.from_pretrained(summarization_model_name)
+            self.summarization_model = AutoModelForSeq2SeqLM.from_pretrained(summarization_model_name)
+            
+            print("AI models loaded successfully!")
             
         except Exception as e:
-            print(f"Error loading AI model: {e}")
+            print(f"Error loading AI models: {e}")
             self.ner_model = None
+            self.summarization_model = None
     
     def _load_common_words(self) -> Set[str]:
         """Tải danh sách từ thông dụng cần loại bỏ"""
@@ -77,7 +98,6 @@ class StockExtractor:
         return bool(vietnamese_pattern.search(text))
     
     def _is_fully_uppercase_in_text(self, text: str, word: str) -> bool:
-        # Tìm tất cả các vị trí xuất hiện của từ trong văn bản
         pattern = re.compile(re.escape(word), re.IGNORECASE)
         matches = list(pattern.finditer(text))
         
@@ -89,18 +109,15 @@ class StockExtractor:
         return False
     
     def _is_valid_stock_context(self, text: str, stock_code: str) -> bool:
-        # Kiểm tra xem từ có được viết hoa toàn bộ không
         if not self._is_fully_uppercase_in_text(text, stock_code):
             return False
         
-        # Tìm vị trí của mã trong văn bản
         pattern = re.compile(re.escape(stock_code), re.IGNORECASE)
         matches = list(pattern.finditer(text))
         
         for match in matches:
             start, end = match.start(), match.end()
             
-            # Lấy ngữ cảnh xung quanh (20 ký tự mỗi bên)
             context_start = max(0, start - 20)
             context_end = min(len(text), end + 20)
             context = text[context_start:context_end].lower()
@@ -130,7 +147,6 @@ class StockExtractor:
             for entity in entities:
                 entity_text = entity['word'].upper().strip()
                 
-                # Bỏ qua nếu có dấu tiếng Việt
                 if self._has_vietnamese_accents(entity_text):
                     continue
                 
@@ -138,7 +154,6 @@ class StockExtractor:
                     entity_text.isalpha() and
                     entity_text in self.vietnamese_stocks):
                     
-                    # Kiểm tra xem có phải từ thông dụng không
                     if entity_text in self.common_words:    
                         if (self._is_fully_uppercase_in_text(text, entity_text) and 
                             self._is_valid_stock_context(text, entity_text)):
@@ -198,7 +213,7 @@ class StockExtractor:
         return valid_codes
     
     def get_stock_codes_with_context(self, text: str) -> List[str]:
-        """Lấy mã chứng khoán kèm ngữ cảnh (hiện tại trả về giống extract_stock_codes)"""
+        """Lấy mã chứng khoán kèm ngữ cảnh"""
         return self.extract_stock_codes(text)
     
     def has_stock_mention(self, text: str) -> bool:
@@ -212,78 +227,155 @@ class StockExtractor:
         self._cache.clear()
         print("Stock list refreshed from database")
     
+    def _split_into_sentences(self, text: str) -> List[str]:
+        """Tách văn bản thành các câu với NLTK"""
+        try:
+            # Sử dụng NLTK để tách câu
+            sentences = sent_tokenize(text)
+            sentences = [s.strip() for s in sentences if s.strip()]
+            
+            if not sentences:
+                return [text]
+            
+            return sentences
+        except Exception as e:
+            print(f"Error splitting sentences with NLTK: {e}")
+            # Fallback: sử dụng regex để tách câu
+            sentence_endings = r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|!|…)\s'
+            sentences = re.split(sentence_endings, text)
+            sentences = [s.strip() for s in sentences if s.strip()]
+            
+            if not sentences:
+                return [text]
+            
+            return sentences
+    
+    def _extract_with_textrank(self, text: str, ratio: float = 0.2) -> str:
+        """Trích xuất câu quan trọng sử dụng TextRank"""
+        try:
+            summary = textrank_summarizer.summarize(text, ratio=ratio)
+            return summary if summary else ""
+        except:
+            return ""
+    
+    def _extract_with_ai_summarization(self, text: str, max_length: int = 150) -> str:
+        """Trích xuất câu quan trọng sử dụng model AI"""
+        if not self.summarization_model or len(text) < 50:
+            return self._extract_with_textrank(text)
+        
+        try:
+            # Chuẩn bị input
+            inputs = self.summarization_tokenizer(
+                text, 
+                max_length=512, 
+                truncation=True, 
+                padding="max_length", 
+                return_tensors="pt"
+            )
+            
+            # Generate summary
+            summary_ids = self.summarization_model.generate(
+                inputs.input_ids,
+                max_length=max_length,
+                min_length=30,
+                length_penalty=2.0,
+                num_beams=4,
+                early_stopping=True
+            )
+            
+            # Decode kết quả
+            summary = self.summarization_tokenizer.decode(
+                summary_ids[0], 
+                skip_special_tokens=True
+            )
+            
+            return summary
+        except Exception as e:
+            print(f"AI summarization failed: {e}")
+            return self._extract_with_textrank(text)
+    
+    def _get_context_sentences(self, sentences: List[str], target_sentence: str, stock_code: str) -> str:
+        """Lấy câu đằng trước và đằng sau câu chứa mã chứng khoán"""
+        try:
+            target_index = sentences.index(target_sentence)
+            
+            # Lấy câu đằng trước (nếu có)
+            prev_sentence = sentences[target_index - 1] if target_index > 0 else ""
+            
+            # Lấy câu đằng sau (nếu có)
+            next_sentence = sentences[target_index + 1] if target_index < len(sentences) - 1 else ""
+            
+            # Kết hợp thành context
+            context = ""
+            if prev_sentence:
+                context += prev_sentence + " "
+            
+            context += target_sentence
+            
+            if next_sentence:
+                context += " " + next_sentence
+            
+            return context.strip()
+        except ValueError:
+            # Nếu không tìm thấy câu trong danh sách, trả về câu gốc
+            return target_sentence
+    
     def extract_important_sentences(self, text: str, stock_codes: List[str]) -> Dict[str, str]:
         if not text:
             return {}
     
         sentences = self._split_into_sentences(text)
-    
         important_sentences = {}
     
-    # Nếu có mã chứng khoán, tìm câu chứa mã chứng khoán
         if stock_codes:
             for stock_code in stock_codes:
-            # Tìm câu chứa mã chứng khoán
                 stock_sentences = []
-            
+                
                 for sentence in sentences:
                     if re.search(rf'\b{stock_code}\b', sentence, re.IGNORECASE):
                         stock_sentences.append(sentence)
-            
-            # Nếu có nhiều câu, chọn câu quan trọng nhất
+                
                 if stock_sentences:
                     if len(stock_sentences) == 1:
-                        important_sentences[stock_code] = stock_sentences[0]
+                        # Lấy context cho câu duy nhất
+                        context = self._get_context_sentences(sentences, stock_sentences[0], stock_code)
+                        important_sentences[stock_code] = context
                     else:
-                    # Chọn câu có độ dài hợp lý và chứa từ khóa quan trọng
                         scored_sentences = []
                         for sentence in stock_sentences:
                             score = self._score_sentence_importance(sentence, stock_code)
                             scored_sentences.append((sentence, score))
                     
                         scored_sentences.sort(key=lambda x: x[1], reverse=True)
-                        important_sentences[stock_code] = scored_sentences[0][0]
+                        # Lấy context cho câu quan trọng nhất
+                        best_sentence = scored_sentences[0][0]
+                        context = self._get_context_sentences(sentences, best_sentence, stock_code)
+                        important_sentences[stock_code] = context
         else:
-        # Nếu không có mã chứng khoán, chọn câu quan trọng nhất toàn bài
-            if sentences:
-                scored_sentences = []
-                for sentence in sentences:
-                    score = self._score_sentence_importance(sentence, "")
-                    scored_sentences.append((sentence, score))
-            
-                scored_sentences.sort(key=lambda x: x[1], reverse=True)
-                if scored_sentences:
-                    important_sentences["GENERAL"] = scored_sentences[0][0]
+            # Không có mã chứng khoán, lấy toàn bộ context
+            if len(text) > 200:
+                summary = self._extract_with_ai_summarization(text)
+                if summary:
+                    important_sentences["GENERAL"] = summary
+                else:
+                    # Lấy toàn bộ text nếu summarization thất bại
+                    important_sentences["GENERAL"] = text
+            else:
+                # Với text ngắn, lấy toàn bộ text
+                important_sentences["GENERAL"] = text
     
         return important_sentences
-    
-    def _split_into_sentences(self, text: str) -> List[str]:
-        """Tách văn bản thành các câu"""
-        # Sử dụng regex để tách câu, xem xét các dấu câu tiếng Việt
-        sentence_endings = r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|!|…)\s'
-        sentences = re.split(sentence_endings, text)
-        
-        # Lọc bỏ các câu trống
-        sentences = [s.strip() for s in sentences if s.strip()]
-        
-        # Nếu không tách được câu, trả về toàn bộ văn bản
-        if not sentences:
-            return [text]
-        
-        return sentences
     
     def _score_sentence_importance(self, sentence: str, stock_code: str) -> float:
         """Đánh giá mức độ quan trọng của câu"""
         score = 0.0
         
-        # Ưu tiên câu có độ dài vừa phải
         word_count = len(sentence.split())
         if 5 <= word_count <= 25:
             score += 2.0
         elif word_count > 25:
             score -= 1.0
         
-        # Ưu tiên câu chứa từ khóa tài chính
         financial_keywords = [
             'cổ phiếu', 'chứng khoán', 'giá', 'mua', 'bán', 'tăng', 'giảm',
             'lãi', 'lỗ', 'đầu tư', 'khuyến nghị', 'thị trường', 'giao dịch',
