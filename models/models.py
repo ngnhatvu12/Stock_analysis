@@ -20,12 +20,12 @@ def create_summary_table():
             CREATE TABLE post_summary (
                 id SERIAL PRIMARY KEY,
                 post_id VARCHAR(50) NOT NULL,
-                content_tom_tat TEXT,
                 ma_chung_khoan VARCHAR(10),
                 cau_quan_trong TEXT,
                 confidence_score FLOAT DEFAULT 0.5,
                 cam_xuc VARCHAR(20),
-                timestamp BIGINT
+                timestamp BIGINT,
+                source VARCHAR(20) DEFAULT 'facebook'
             )
             """
             cur.execute(create_table_query)
@@ -34,17 +34,19 @@ def create_summary_table():
             cur.execute("CREATE INDEX idx_post_summary_ma_chung_khoan ON post_summary(ma_chung_khoan)")
             cur.execute("CREATE INDEX idx_post_summary_cam_xuc ON post_summary(cam_xuc)")
             cur.execute("CREATE INDEX idx_post_summary_timestamp ON post_summary(timestamp)")
+            cur.execute("CREATE INDEX idx_post_summary_source ON post_summary(source)")
             
             conn.commit()
             print("post_summary table created successfully!")
         else:
             try:
-                cur.execute("ALTER TABLE post_summary ADD COLUMN timestamp BIGINT")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_post_summary_timestamp ON post_summary(timestamp)")
+                # Thêm cột source nếu chưa có
+                cur.execute("ALTER TABLE post_summary ADD COLUMN source VARCHAR(20) DEFAULT 'facebook'")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_post_summary_source ON post_summary(source)")
                 conn.commit()
-                print("Added timestamp column to post_summary table")
+                print("Added source column to post_summary table")
             except psycopg2.errors.DuplicateColumn:
-                print("timestamp column already exists")
+                print("source column already exists")
                 conn.rollback()
             
     except psycopg2.errors.DuplicateTable:
@@ -85,6 +87,7 @@ def create_reply_summary_table():
                 cam_xuc VARCHAR(20),
                 timestamp BIGINT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                source VARCHAR(20) DEFAULT 'facebook',
                 UNIQUE(reply_id, stock_id)
             )
             """
@@ -95,17 +98,18 @@ def create_reply_summary_table():
             cur.execute("CREATE INDEX idx_reply_summary_stock_id ON reply_summary(stock_id)")
             cur.execute("CREATE INDEX idx_reply_summary_cam_xuc ON reply_summary(cam_xuc)")
             cur.execute("CREATE INDEX idx_reply_summary_timestamp ON reply_summary(timestamp)")
+            cur.execute("CREATE INDEX idx_reply_summary_source ON reply_summary(source)")
             
             conn.commit()
             print("reply_summary table created successfully!")
         else:
             try:
-                cur.execute("ALTER TABLE reply_summary ADD COLUMN timestamp BIGINT")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_reply_summary_timestamp ON reply_summary(timestamp)")
+                cur.execute("ALTER TABLE reply_summary ADD COLUMN source VARCHAR(20) DEFAULT 'facebook'")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_reply_summary_source ON reply_summary(source)")
                 conn.commit()
-                print("Added timestamp column to reply_summary table")
+                print("Added source column to reply_summary table")
             except psycopg2.errors.DuplicateColumn:
-                print("timestamp column already exists")
+                print("source column already exists")
                 conn.rollback()
             
     except psycopg2.errors.DuplicateTable:
@@ -118,49 +122,3 @@ def create_reply_summary_table():
         cur.close()
         conn.close()
 
-def create_sentiment_daily_table():
-    """Tạo bảng sentiment_daily để thống kê cảm xúc theo timestamp"""
-    conn = get_db_connection()
-    cur = conn.cursor()
-    
-    try:
-        cur.execute("""
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables 
-                WHERE table_name = 'sentiment_daily'
-            )
-        """)
-        
-        table_exists = cur.fetchone()[0]
-        
-        if not table_exists:
-            create_table_query = """
-            CREATE TABLE sentiment_daily (
-                id SERIAL PRIMARY KEY,
-                timestamp BIGINT NOT NULL UNIQUE,
-                positive INTEGER DEFAULT 0,
-                negative INTEGER DEFAULT 0,
-                neutral INTEGER DEFAULT 0,
-                total_posts INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-            cur.execute(create_table_query)
-            
-            cur.execute("CREATE INDEX idx_sentiment_daily_timestamp ON sentiment_daily(timestamp)")
-            
-            conn.commit()
-            print("sentiment_daily table created successfully!")
-        else:
-            print("sentiment_daily table already exists")
-            
-    except psycopg2.errors.DuplicateTable:
-        print("sentiment_daily table already exists - continuing")
-        conn.rollback()
-    except Exception as e:
-        print(f"Error in create_sentiment_daily_table: {e}")
-        conn.rollback()
-    finally:
-        cur.close()
-        conn.close()

@@ -34,7 +34,7 @@ class SentimentAnalyzer:
                     tokenizer=tokenizer,
                     device=0 if torch.cuda.is_available() else -1
                 )
-                print("✓ Loaded visobert_sentiment successfully with pipeline!")
+                print("Loaded visobert_sentiment successfully with pipeline!")
                 
             except Exception as e:
                 print(f"Failed to load visobert_sentiment with pipeline: {e}")
@@ -53,11 +53,10 @@ class SentimentAnalyzer:
                     'tokenizer': tokenizer,
                     'model': model
                 }
-                print("✓ Loaded visobert_sentiment (fallback) successfully!")
+                print("Loaded visobert_sentiment (fallback) successfully!")
             
         except Exception as e:
             print(f"Error loading sentiment models: {e}")
-            # Thử phương án dự phòng khác
             self._try_alternative_loading()
     
     def _download_model_locally(self, model_name: str) -> str:

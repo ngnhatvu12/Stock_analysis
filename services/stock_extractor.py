@@ -2,11 +2,10 @@ import re
 import os
 from typing import List, Set, Dict, Any
 import time
-from transformers import pipeline, AutoTokenizer, AutoModelForTokenClassification, AutoModelForSeq2SeqLM
+from transformers import pipeline, AutoTokenizer, AutoModelForTokenClassification
 import torch
 import psycopg2
 from config.database import get_db_connection
-from summa import summarizer as textrank_summarizer
 import nltk
 from nltk.tokenize import sent_tokenize
 
@@ -22,14 +21,10 @@ class StockExtractor:
         self._cache = {}
         self._cache_size = 1000      
         self.ner_model = None
-        self.tokenizer = None
-        self.summarization_model = None
         self.vietnamese_stocks = self._load_stocks_from_db()
         self._init_ai_model()
         
-        # Sử dụng NLTK thay thế cho VnCoreNLP
         print("Using NLTK for sentence splitting")
-        self.rdrsegmenter = None
     
     def _load_stocks_from_db(self) -> Set[str]:
         conn = None
@@ -53,9 +48,9 @@ class StockExtractor:
     
     def _init_ai_model(self):
         try:
-            print("Loading AI models for stock recognition and summarization...")
+            print("Loading AI models for stock recognition...")
             
-            # Model nhận diện thực thể (giữ nguyên)
+            # Chỉ load model nhận diện thực thể, không load model summarization
             model_name = "Davlan/bert-base-multilingual-cased-ner-hrl"
             self.ner_model = pipeline(
                 "ner",
@@ -65,17 +60,11 @@ class StockExtractor:
                 device=-1 
             )
             
-            # Thêm model summarization cho tiếng Việt
-            summarization_model_name = "VietAI/vit5-base-vietnews-summarization"
-            self.summarization_tokenizer = AutoTokenizer.from_pretrained(summarization_model_name)
-            self.summarization_model = AutoModelForSeq2SeqLM.from_pretrained(summarization_model_name)
-            
-            print("AI models loaded successfully!")
+            print("AI model for stock recognition loaded successfully!")
             
         except Exception as e:
-            print(f"Error loading AI models: {e}")
+            print(f"Error loading AI model: {e}")
             self.ner_model = None
-            self.summarization_model = None
     
     def _load_common_words(self) -> Set[str]:
         """Tải danh sách từ thông dụng cần loại bỏ"""
@@ -89,7 +78,7 @@ class StockExtractor:
             'AI', 'VR', 'AR', 'MR', 'UI', 'UX', 'CFO', 'CTO', 'COO', 'HR',
             'PR', 'QA', 'QC', 'KPI', 'ROI', 'CRM', 'ERP', 'SAP', 'HRM', 'SCM',
             'BI', 'B2B', 'B2C', 'C2C', 'O2O', 'IPO', 'M&A', 'B2G', 'G2B', 'G2C',
-            'C2G', 'KQKD', 'DT','COM','NHA','TRC'
+            'C2G', 'KQKD', 'DT','COM','NHA','TRC','TRA'
         }
     
     def _has_vietnamese_accents(self, text: str) -> bool:
@@ -98,8 +87,9 @@ class StockExtractor:
         return bool(vietnamese_pattern.search(text))
     
     def _is_fully_uppercase_in_text(self, text: str, word: str) -> bool:
-        pattern = re.compile(re.escape(word), re.IGNORECASE)
-        matches = list(pattern.finditer(text))
+        """Kiểm tra xem từ có được viết hoa hoàn toàn trong văn bản không"""
+        pattern = re.compile(rf'\b{re.escape(word)}\b', re.IGNORECASE)
+        matches = pattern.finditer(text)
         
         for match in matches:
             matched_text = text[match.start():match.end()]
@@ -250,50 +240,6 @@ class StockExtractor:
             
             return sentences
     
-    def _extract_with_textrank(self, text: str, ratio: float = 0.2) -> str:
-        """Trích xuất câu quan trọng sử dụng TextRank"""
-        try:
-            summary = textrank_summarizer.summarize(text, ratio=ratio)
-            return summary if summary else ""
-        except:
-            return ""
-    
-    def _extract_with_ai_summarization(self, text: str, max_length: int = 150) -> str:
-        """Trích xuất câu quan trọng sử dụng model AI"""
-        if not self.summarization_model or len(text) < 50:
-            return self._extract_with_textrank(text)
-        
-        try:
-            # Chuẩn bị input
-            inputs = self.summarization_tokenizer(
-                text, 
-                max_length=512, 
-                truncation=True, 
-                padding="max_length", 
-                return_tensors="pt"
-            )
-            
-            # Generate summary
-            summary_ids = self.summarization_model.generate(
-                inputs.input_ids,
-                max_length=max_length,
-                min_length=30,
-                length_penalty=2.0,
-                num_beams=4,
-                early_stopping=True
-            )
-            
-            # Decode kết quả
-            summary = self.summarization_tokenizer.decode(
-                summary_ids[0], 
-                skip_special_tokens=True
-            )
-            
-            return summary
-        except Exception as e:
-            print(f"AI summarization failed: {e}")
-            return self._extract_with_textrank(text)
-    
     def _get_context_sentences(self, sentences: List[str], target_sentence: str, stock_code: str) -> str:
         """Lấy câu đằng trước và đằng sau câu chứa mã chứng khoán"""
         try:
@@ -352,17 +298,8 @@ class StockExtractor:
                         context = self._get_context_sentences(sentences, best_sentence, stock_code)
                         important_sentences[stock_code] = context
         else:
-            # Không có mã chứng khoán, lấy toàn bộ context
-            if len(text) > 200:
-                summary = self._extract_with_ai_summarization(text)
-                if summary:
-                    important_sentences["GENERAL"] = summary
-                else:
-                    # Lấy toàn bộ text nếu summarization thất bại
-                    important_sentences["GENERAL"] = text
-            else:
-                # Với text ngắn, lấy toàn bộ text
-                important_sentences["GENERAL"] = text
+            # KHÔNG CÓ MÃ CHỨNG KHOÁN - LẤY TOÀN BỘ NỘI DUNG
+            important_sentences["GENERAL"] = text
     
         return important_sentences
     
