@@ -170,17 +170,29 @@ def train_comprehensive_model():
     """Huấn luyện mô hình tổng hợp bao gồm cả dữ liệu không có mã chứng khoán"""
     from data_preparation import TrainingDataPreparer
     
-    preparer = TrainingDataPreparer()
+    # SỬA: Sử dụng đường dẫn đúng
+    preparer = TrainingDataPreparer("training_data/synthetic_stock_sentiment_20000.jsonl")
     
     # Tạo dataset tổng hợp
     training_data = preparer.create_training_dataset('training_data_complete.jsonl')
     
+    if len(training_data) == 0:
+        print("No training data available. Please check if synthetic data file exists.")
+        return False
+    
     # Huấn luyện mô hình
     trainer = SentimentTrainer("vinai/phobert-base", include_stock_info=True)
+    
+    # SỬA: Kiểm tra file tồn tại trước khi load
+    if not os.path.exists('training_data_complete.jsonl'):
+        print("Training data file not found")
+        return False
+        
     dataset = trainer.load_data('training_data_complete.jsonl')
     
     if len(dataset) < 100:
         print(f"Not enough training data: {len(dataset)} samples. Need at least 100 samples.")
+        print("Consider generating more synthetic data or using a smaller model.")
         return False
     
     dataset_split = dataset.train_test_split(test_size=0.2, seed=42)

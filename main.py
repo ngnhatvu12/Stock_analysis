@@ -2,7 +2,7 @@ import psycopg2
 from config.database import get_db_connection
 from services.stock_extractor import StockExtractor
 from services.sentiment_analyzer import SentimentAnalyzer
-from models.models import create_summary_table, create_reply_summary_table
+from models.models import create_summary_table, create_reply_summary_table, create_news_statistics_table, create_rumor_analyst_table
 import time
 from datetime import datetime, timedelta
 import unicodedata
@@ -91,6 +91,27 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                     FROM fireant_posts f 
                     WHERE NOT EXISTS (
                         SELECT 1 FROM post_summary ps WHERE ps.post_id = f.post_id::text AND ps.source = 'fireant'
+                    )
+                    LIMIT %s
+                """, (batch_size,))
+        elif source == 'zalo':
+            # Xử lý dữ liệu từ Zalo
+            if last_24h_only:
+                cur.execute("""
+                    SELECT z.id, z.content, z.date
+                    FROM zalo_chat z 
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM post_summary ps WHERE ps.post_id = z.id::text AND ps.source = 'zalo'
+                    )
+                    AND z.date >= %s
+                    LIMIT %s
+                """, (twenty_four_hours_ago, batch_size))
+            else:
+                cur.execute("""
+                    SELECT z.id, z.content, z.date
+                    FROM zalo_chat z 
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM post_summary ps WHERE ps.post_id = z.id::text AND ps.source = 'zalo'
                     )
                     LIMIT %s
                 """, (batch_size,))
@@ -218,6 +239,28 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
         cur.close()
         conn.close()
 
+def process_rumors_batch(batch_size=100, last_24h_only=False):
+    """
+    Xử lý dữ liệu từ bảng rumor và chuyển sang rumor_analyst
+    Chỉ viết lại nội dung, giữ nguyên các thông tin khác
+    """
+    from services.rumor_processor import RumorProcessor
+    
+    print(f"Starting rumor processing (batch_size={batch_size}, last_24h={last_24h_only})...")
+    
+    rumor_processor = RumorProcessor()
+    processed_count = rumor_processor.process_rumors_batch(
+        batch_size=batch_size, 
+        last_24h_only=last_24h_only
+    )
+    
+    if processed_count > 0:
+        stats = rumor_processor.get_processing_stats()
+        print(f"Rumor processing completed: {processed_count} rumors processed")
+        print(f"Overall progress: {stats.get('processing_rate', 0):.1f}%")
+    
+    return processed_count
+
 def process_replies_for_post(post_id, stock_extractor, sentiment_analyzer, conn, use_custom_model=False):
     """Xử lý tất cả bình luận của một post (chỉ cho Facebook)"""
     cur = conn.cursor()
@@ -319,55 +362,198 @@ def process_replies_for_post(post_id, stock_extractor, sentiment_analyzer, conn,
         cur.close()
 
 def retrain_sentiment_model():
-    """Huấn luyện lại mô hình cảm xúc với dữ liệu đầy đủ"""
+    """Huấn luyện lại mô hình cảm xúc với dữ liệu synthetic"""
     try:
-        # Import các module training
         from training.data_preparation import TrainingDataPreparer
-        from training.train_sentiment_model import SentimentTrainer, train_comprehensive_model
+        from training.train_sentiment_model import train_comprehensive_model
         
         print("Starting comprehensive model retraining...")
+
+        # SỬA: Đường dẫn đúng đến file synthetic data
+        synthetic_data_path = "training_data/synthetic_stock_sentiment_20000.jsonl"
         
-        # Chuẩn bị dữ liệu đầy đủ (bao gồm cả không có mã chứng khoán)
-        preparer = TrainingDataPreparer()
-        training_data = preparer.create_training_dataset('training_data_complete.jsonl')
+        # Load dữ liệu từ synthetic file
+        preparer = TrainingDataPreparer(synthetic_data_path)
+        preparer.create_training_dataset("training_data_complete.jsonl")
         
-        # Huấn luyện mô hình tổng hợp
+        # Huấn luyện mô hình
         success = train_comprehensive_model()
         
         if success:
             print("Comprehensive model retraining completed successfully!")
         else:
-            print("Model retraining failed due to insufficient data")
-        
+            print("Model retraining failed (not enough data)")
         return success
-        
     except Exception as e:
         print(f"Model retraining failed: {e}")
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return False
+
 
 def evaluate_model():
     """Đánh giá mô hình đã huấn luyện"""
     try:
         from training.evaluate_model import evaluate_model as eval_func
         
-        if not os.path.exists('training_data.jsonl'):
+        test_file = 'training_data_complete.jsonl' 
+        if not os.path.exists(test_file):
             print("No training data found. Please run retraining first.")
             return False
             
         print("Evaluating trained model...")
-        results = eval_func('training_data.jsonl', './trained_sentiment_model')
+        results = eval_func(test_file, './trained_sentiment_model')
         print("Evaluation completed!")
         return True
         
     except Exception as e:
         print(f"Model evaluation failed: {e}")
+        import traceback; traceback.print_exc()
         return False
 
+def calculate_daily_statistics():
+    """Tính toán thống kê hàng ngày từ post_summary"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # Lấy timestamp của 0h hôm nay và 0h hôm qua
+        from datetime import datetime, time
+        today = datetime.now().date()
+        today_start = int(datetime.combine(today, time(0, 0, 0)).timestamp())
+        yesterday_start = today_start - (24 * 60 * 60)
+        
+        # Kiểm tra xem đã có thống kê cho ngày hôm nay chưa
+        cur.execute("SELECT id FROM news_statistics WHERE timestamp = %s", (today_start,))
+        existing_stat = cur.fetchone()
+        
+        if existing_stat:
+            print(f"Statistics for {today} already exist. Skipping...")
+            return
+        
+        # Thống kê tổng quan từ tất cả nguồn
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total,
+                COUNT(CASE WHEN cam_xuc = 'TÍCH_CỰC' THEN 1 END) as total_positive,
+                COUNT(CASE WHEN cam_xuc = 'TIÊU_CỰC' THEN 1 END) as total_negative,
+                COUNT(CASE WHEN cam_xuc = 'TRUNG_TÍNH' THEN 1 END) as total_neutral
+            FROM post_summary 
+            WHERE timestamp >= %s AND timestamp < %s
+        """, (yesterday_start, today_start))
+        
+        total_stats = cur.fetchone()
+        
+        # Thống kê theo từng nguồn
+        sources = ['facebook', 'youtube', 'fireant', 'zalo', 'tiktok', 'news']
+        source_counts = {}
+        
+        for source in sources:
+            cur.execute("""
+                SELECT COUNT(*) 
+                FROM post_summary 
+                WHERE source = %s AND timestamp >= %s AND timestamp < %s
+            """, (source, yesterday_start, today_start))
+            source_counts[source] = cur.fetchone()[0] or 0
+        
+        # Chèn dữ liệu thống kê vào bảng
+        cur.execute("""
+            INSERT INTO news_statistics 
+            (timestamp, total, total_positive, total_negative, total_neutral, 
+             news, fireant, zalo, facebook, youtube, tiktok, aim_score)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            yesterday_start,  # Thống kê cho ngày hôm qua
+            total_stats[0] or 0,
+            total_stats[1] or 0,
+            total_stats[2] or 0,
+            total_stats[3] or 0,
+            source_counts['news'],
+            source_counts['fireant'],
+            source_counts['zalo'],
+            source_counts['facebook'],
+            source_counts['youtube'],
+            source_counts['tiktok'],
+            aim_score
+        ))
+        
+        conn.commit()
+        
+        print(f"Daily statistics calculated for {datetime.fromtimestamp(yesterday_start).date()}")
+        print(f"Total: {total_stats[0]}, Positive: {total_stats[1]}, Negative: {total_stats[2]}, Neutral: {total_stats[3]}")
+        
+    except Exception as e:
+        print(f"Error calculating daily statistics: {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
+
+def get_recent_statistics(days=7):
+    """Lấy thống kê của N ngày gần nhất"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        # Tính timestamp của N ngày trước
+        from datetime import datetime, time, timedelta
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=days)
+        start_timestamp = int(datetime.combine(start_date, time(0, 0, 0)).timestamp())
+        
+        cur.execute("""
+            SELECT 
+                timestamp,
+                total,
+                total_positive,
+                total_negative,
+                total_neutral,
+                news,
+                fireant,
+                zalo,
+                facebook,
+                youtube,
+                tiktok,
+                aim_score
+            FROM news_statistics 
+            WHERE timestamp >= %s 
+            ORDER BY timestamp DESC
+        """, (start_timestamp,))
+        
+        stats = cur.fetchall()
+        
+        # Format kết quả
+        result = []
+        for stat in stats:
+            result.append({
+                'date': datetime.fromtimestamp(stat[0]).strftime('%Y-%m-%d'),
+                'total': stat[1],
+                'total_positive': stat[2],
+                'total_negative': stat[3],
+                'total_neutral': stat[4],
+                'news': stat[5],
+                'fireant': stat[6],
+                'zalo': stat[7],
+                'facebook': stat[8],
+                'youtube': stat[9],
+                'tiktok': stat[10],
+                'aim_score': stat[11]
+            })
+        
+        return result
+        
+    except Exception as e:
+        print(f"Error getting recent statistics: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
 def main():
     """Hàm main chạy một lần"""
     try:
+        create_summary_table()
+        create_reply_summary_table()
+        create_news_statistics_table()
+        create_rumor_analyst_table()
         # Xử lý các tham số dòng lệnh
         if len(sys.argv) > 1:
             if sys.argv[1] == "--retrain":
@@ -379,7 +565,30 @@ def main():
             elif sys.argv[1] == "--evaluate":
                 success = evaluate_model()
                 return 0 if success else 1
+            elif sys.argv[1] == "--export-excel":
+                print("Exporting training data to Excel...")
+                from training.data_preparation import TrainingDataPreparer
                 
+                preparer = TrainingDataPreparer()
+                
+                # Xác định file paths
+                jsonl_file = "training_data_complete.jsonl"
+                excel_file = "training_data.xlsx"
+                
+                # Nếu có tham số thứ 2, dùng làm tên file output
+                if len(sys.argv) > 2:
+                    excel_file = sys.argv[2]
+                    if not excel_file.endswith('.xlsx'):
+                        excel_file += '.xlsx'
+                
+                # Kiểm tra file JSONL tồn tại
+                if not os.path.exists(jsonl_file):
+                    print(f"File {jsonl_file} không tồn tại. Đang tạo dataset mới...")
+                    preparer.create_training_dataset(jsonl_file)
+                
+                # Xuất sang Excel
+                success = preparer.export_to_excel(jsonl_file, excel_file)
+                return 0 if success else 1  
             elif sys.argv[1] == "--use-custom":
                 print(f"\n{datetime.now()} - Starting batch processing with custom model...")
                 # Xử lý Facebook posts
@@ -388,13 +597,18 @@ def main():
                 processed_yt = process_posts_batch(batch_size=1000, use_custom_model=True, source='youtube')
                 # Xử lý FireAnt posts
                 processed_fa = process_posts_batch(batch_size=1000, use_custom_model=True, source='fireant')
-                processed = processed_fb + processed_yt + processed_fa
+                # Xử lý Zalo posts
+                processed_zalo = process_posts_batch(batch_size=1000, use_custom_model=True, source='zalo')
+                processed = processed_fb + processed_yt + processed_fa + processed_zalo
             elif sys.argv[1] == "--youtube-only":
                 print(f"\n{datetime.now()} - Processing YouTube posts only...")
                 processed = process_posts_batch(batch_size=1000, source='youtube')
             elif sys.argv[1] == "--fireant-only":
                 print(f"\n{datetime.now()} - Processing FireAnt posts only...")
                 processed = process_posts_batch(batch_size=1000, source='fireant')
+            elif sys.argv[1] == "--zalo-only":
+                print(f"\n{datetime.now()} - Processing Zalo posts only...")
+                processed = process_posts_batch(batch_size=1000, source='zalo')
             elif sys.argv[1] == "--last-24h":
                 print(f"\n{datetime.now()} - Processing posts from last 24 hours with custom model...")
                 # Xử lý Facebook posts từ 24h qua
@@ -403,10 +617,31 @@ def main():
                 processed_yt = process_posts_batch(batch_size=1000, use_custom_model=True, source='youtube', last_24h_only=True)
                 # Xử lý FireAnt posts từ 24h qua
                 processed_fa = process_posts_batch(batch_size=1000, use_custom_model=True, source='fireant', last_24h_only=True)
-                processed = processed_fb + processed_yt + processed_fa
+                # Xử lý Zalo posts từ 24h qua
+                processed_zalo = process_posts_batch(batch_size=1000, use_custom_model=True, source='zalo', last_24h_only=True)
+                processed = processed_fb + processed_yt + processed_fa + processed_zalo
+            elif sys.argv[1] == "--process-rumors":
+                print(f"\n{datetime.now()} - Processing rumors (rewrite content only)...")
+                last_24h = "--last-24h" in sys.argv
+                batch_size = 100
+                
+                # Xác định batch size nếu có tham số
+                for arg in sys.argv:
+                    if arg.startswith("--batch-size="):
+                        try:
+                            batch_size = int(arg.split("=")[1])
+                        except:
+                            pass
+                
+                processed = process_rumors_batch(
+                    batch_size=batch_size,
+                    last_24h_only=last_24h
+                )
+                print(f"Processed {processed} rumors")
+                return 0
             else:
                 print(f"Unknown argument: {sys.argv[1]}")
-                print("Usage: python main.py [--retrain | --evaluate | --use-custom | --youtube-only | --fireant-only | --last-24h]")
+                print("Usage: python main.py [--retrain | --evaluate | --use-custom | --youtube-only | --fireant-only | --zalo-only | --last-24h | --stats [days]]")
                 return 1
         else:
             # Chế độ mặc định: xử lý với model gốc
@@ -417,13 +652,17 @@ def main():
             processed_yt = process_posts_batch(batch_size=1000, source='youtube')
             # Xử lý FireAnt posts
             processed_fa = process_posts_batch(batch_size=1000, source='fireant')
-            processed = processed_fb + processed_yt + processed_fa
+            # Xử lý Zalo posts
+            processed_zalo = process_posts_batch(batch_size=1000, source='zalo')
+            processed = processed_fb + processed_yt + processed_fa + processed_zalo
         
         if processed == 0:
             print("No posts to process.")
         else:
             print(f"Successfully processed {processed} posts.")
-            
+        if processed > 0:
+            print("Calculating daily statistics...")
+            calculate_daily_statistics()
     except Exception as e:
         print(f"Error in processing: {e}")
         import traceback

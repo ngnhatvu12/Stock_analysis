@@ -1,11 +1,29 @@
+# Core
 psycopg2-binary==2.9.10
 python-dotenv==1.0.0
 requests==2.31.0
+
+# NLP
 nltk==3.8.1
-transformers==4.30.0
+underthesea==6.0.0
 beautifulsoup4==4.12.2
+
+# PyTorch với CPU-only (nhẹ hơn cho Docker)
 torch==2.1.1 -f https://download.pytorch.org/whl/cpu/torch_stable.html
+
+# Transformers & Hugging Face
+transformers==4.30.0
 sentencepiece==0.1.99
 accelerate==0.23.0
 datasets==2.14.5
-seqeval==1.2.2
+huggingface-hub==0.16.4
+
+# Data Science
+numpy==1.24.0
+pandas==2.0.0
+scikit-learn==1.2.0
+openpyxl==3.1.2
+
+# Utilities
+schedule==1.2.0
+unicodedata2==15.1.0

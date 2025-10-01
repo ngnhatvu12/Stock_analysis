@@ -2,3 +2,4 @@
 .env.docker
 training_data_complete.jsonl
 trained_sentiment_model_complete/
+training_data/

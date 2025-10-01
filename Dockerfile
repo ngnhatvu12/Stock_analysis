@@ -2,19 +2,20 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
+# Copy requirements trước để tận dụng cache Docker
 COPY requirements.txt .
+
+# Cài đặt dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy source code
 COPY . .
 
+# Tạo thư mục log
 RUN mkdir -p logs
 
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH=/app
+# Expose port nếu cần
+# EXPOSE 8000
 
+# Chạy scheduler thay vì main.py
 CMD ["python", "scheduler.py"]

@@ -121,4 +121,102 @@ def create_reply_summary_table():
     finally:
         cur.close()
         conn.close()
-
+        
+def create_news_statistics_table():
+    """Tạo bảng news_statistics nếu chưa tồn tại"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'news_statistics'
+            )
+        """)
+        
+        table_exists = cur.fetchone()[0]
+        
+        if not table_exists:
+            create_table_query = """
+            CREATE TABLE news_statistics (
+                id SERIAL PRIMARY KEY,
+                timestamp BIGINT NOT NULL,
+                total INTEGER NOT NULL,
+                total_positive INTEGER NOT NULL,
+                total_negative INTEGER NOT NULL,
+                total_neutral INTEGER NOT NULL,
+                news INTEGER NOT NULL,
+                fireant INTEGER NOT NULL,
+                zalo INTEGER NOT NULL,
+                facebook INTEGER NOT NULL,
+                youtube INTEGER NOT NULL,
+                tiktok INTEGER NOT NULL,
+                aim_score DOUBLE PRECISION
+            )
+            """
+            cur.execute(create_table_query)
+            
+            cur.execute("CREATE INDEX idx_news_statistics_timestamp ON news_statistics(timestamp)")
+            
+            conn.commit()
+            print("news_statistics table created successfully!")
+        else:
+            print("news_statistics table already exists")
+            
+    except Exception as e:
+        print(f"Error in create_news_statistics_table: {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
+        
+def create_rumor_analyst_table():
+    """Tạo bảng rumor_analyst nếu chưa tồn tại"""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    try:
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'rumor_analyst'
+            )
+        """)
+        
+        table_exists = cur.fetchone()[0]
+        
+        if not table_exists:
+            create_table_query = """
+            CREATE TABLE rumor_analyst (
+                id SERIAL PRIMARY KEY,
+                original_content TEXT NOT NULL,
+                rewritten_content TEXT NOT NULL,
+                symbol VARCHAR(20),
+                sentiment VARCHAR(20),
+                source VARCHAR(50),
+                timestamp BIGINT,
+                processed_from_rumor_id INTEGER,
+                FOREIGN KEY (processed_from_rumor_id) REFERENCES rumor(id)
+            )
+            """
+            cur.execute(create_table_query)
+            
+            # Tạo indexes
+            cur.execute("CREATE INDEX idx_rumor_analyst_symbol ON rumor_analyst(symbol)")
+            cur.execute("CREATE INDEX idx_rumor_analyst_sentiment ON rumor_analyst(sentiment)")
+            cur.execute("CREATE INDEX idx_rumor_analyst_timestamp ON rumor_analyst(timestamp)")
+            cur.execute("CREATE INDEX idx_rumor_analyst_source ON rumor_analyst(source)")
+            cur.execute("CREATE INDEX idx_rumor_analyst_rumor_id ON rumor_analyst(processed_from_rumor_id)")
+            
+            conn.commit()
+            print("rumor_analyst table created successfully!")
+        else:
+            print("rumor_analyst table already exists")
+            
+    except Exception as e:
+        print(f"Error in create_rumor_analyst_table: {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
