@@ -2,7 +2,7 @@ import psycopg2
 from config.database import get_db_connection
 from services.stock_extractor import StockExtractor
 from services.sentiment_analyzer import SentimentAnalyzer
-from models.models import create_summary_table, create_reply_summary_table, create_news_statistics_table, create_rumor_analyst_table
+from models.models import create_all_content_table, create_reply_summary_table, create_news_statistics_table, create_rumor_analyst_table
 import time
 from datetime import datetime, timedelta
 import unicodedata
@@ -21,7 +21,7 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
         print("Loading custom trained sentiment model...")
         sentiment_analyzer.load_custom_model("./trained_sentiment_model_complete")
     
-    create_summary_table()
+    create_all_content_table()
     create_reply_summary_table()
     
     conn = get_db_connection()
@@ -38,7 +38,7 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                     SELECT p.post_id, p.content, p.timestamp 
                     FROM fb_post p 
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM post_summary ps WHERE ps.post_id = p.post_id::text AND ps.source = 'facebook'
+                        SELECT 1 FROM all_content ac WHERE ac.content = p.content AND ac.source = 'facebook'
                     )
                     AND p.timestamp >= %s
                     LIMIT %s
@@ -48,7 +48,7 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                     SELECT p.post_id, p.content, p.timestamp 
                     FROM fb_post p 
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM post_summary ps WHERE ps.post_id = p.post_id::text AND ps.source = 'facebook'
+                        SELECT 1 FROM all_content ac WHERE ac.content = p.content AND ac.source = 'facebook'
                     )
                     LIMIT %s
                 """, (batch_size,))
@@ -59,7 +59,7 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                     SELECT y.post_id, y.post_sentence, EXTRACT(epoch FROM y.post_at)::bigint
                     FROM yt_post_summary y 
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM post_summary ps WHERE ps.post_id = y.post_id::text AND ps.source = 'youtube'
+                        SELECT 1 FROM all_content ac WHERE ac.content = y.post_sentence AND ac.source = 'youtube'
                     )
                     AND EXTRACT(epoch FROM y.post_at) >= %s
                     LIMIT %s
@@ -69,7 +69,7 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                     SELECT y.post_id, y.post_sentence, EXTRACT(epoch FROM y.post_at)::bigint
                     FROM yt_post_summary y 
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM post_summary ps WHERE ps.post_id = y.post_id::text AND ps.source = 'youtube'
+                        SELECT 1 FROM all_content ac WHERE ac.content = y.post_sentence AND ac.source = 'youtube'
                     )
                     LIMIT %s
                 """, (batch_size,))
@@ -80,7 +80,7 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                     SELECT f.post_id, f.original_content, EXTRACT(epoch FROM f.date)::bigint
                     FROM fireant_posts f 
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM post_summary ps WHERE ps.post_id = f.post_id::text AND ps.source = 'fireant'
+                        SELECT 1 FROM all_content ac WHERE ac.content = f.original_content AND ac.source = 'fireant'
                     )
                     AND EXTRACT(epoch FROM f.date) >= %s
                     LIMIT %s
@@ -90,7 +90,7 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                     SELECT f.post_id, f.original_content, EXTRACT(epoch FROM f.date)::bigint
                     FROM fireant_posts f 
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM post_summary ps WHERE ps.post_id = f.post_id::text AND ps.source = 'fireant'
+                        SELECT 1 FROM all_content ac WHERE ac.content = f.original_content AND ac.source = 'fireant'
                     )
                     LIMIT %s
                 """, (batch_size,))
@@ -101,7 +101,7 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                     SELECT z.id, z.content, z.date
                     FROM zalo_chat z 
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM post_summary ps WHERE ps.post_id = z.id::text AND ps.source = 'zalo'
+                        SELECT 1 FROM all_content ac WHERE ac.content = z.content AND ac.source = 'zalo'
                     )
                     AND z.date >= %s
                     LIMIT %s
@@ -111,7 +111,7 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                     SELECT z.id, z.content, z.date
                     FROM zalo_chat z 
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM post_summary ps WHERE ps.post_id = z.id::text AND ps.source = 'zalo'
+                        SELECT 1 FROM all_content ac WHERE ac.content = z.content AND ac.source = 'zalo'
                     )
                     LIMIT %s
                 """, (batch_size,))
@@ -135,9 +135,9 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                 
                 if not content or len(content.strip()) < 10:
                     cur.execute("""
-                        INSERT INTO post_summary (post_id, ma_chung_khoan, cau_quan_trong, cam_xuc, timestamp, source)
+                        INSERT INTO all_content (timestamp, source, title, symbol, content, sentiment)
                         VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (post_id_str, None, None, "TRUNG_TÍNH", post_timestamp, source))
+                    """, (post_timestamp, source, None, None, content, "TRUNG_TÍNH"))
                     print(f"Skipped: {post_id_str} ")
                     continue
                 
@@ -145,7 +145,7 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                 
                 stock_codes = stock_extractor.extract_stock_codes(content)
                 
-                cur.execute("DELETE FROM post_summary WHERE post_id = %s AND source = %s", (post_id_str, source))
+                # Không cần DELETE vì đã có constraint UNIQUE
                 
                 if not stock_codes:
                     important_sentences = stock_extractor.extract_important_sentences(content, [])
@@ -159,11 +159,11 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                         sentiment_result = sentiment_analyzer.analyze_sentiment(sentiment_text)
                     
                     sentiment = sentiment_result["normalized_sentiment"]
-                    confidence = sentiment_result["score"]
+                    
                     cur.execute("""
-                    INSERT INTO post_summary (post_id, ma_chung_khoan, cau_quan_trong, cam_xuc, confidence_score, timestamp, source)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                     """, (post_id_str, None, important_sentence, sentiment, confidence, post_timestamp, source))
+                    INSERT INTO all_content (timestamp, source, title, symbol, content, sentiment)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (post_timestamp, source, None, None, important_sentence, sentiment))
                   
                     print(f"Processed: {post_id_str} - No stock codes - Sentiment: {sentiment}")
                 else:
@@ -174,7 +174,6 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                         important_sentence = important_sentences.get(stock_code, "")
                         
                         sentiment = "TRUNG_TÍNH" 
-                        confidence = 0.5
                         
                         if important_sentence:
                             # Sử dụng custom model nếu available
@@ -183,7 +182,6 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                             else:
                                 sentiment_result = sentiment_analyzer.analyze_sentiment(important_sentence)
                             sentiment = sentiment_result["normalized_sentiment"]
-                            confidence = sentiment_result["score"]
                         else:
                             # Sử dụng custom model nếu available
                             if hasattr(sentiment_analyzer, 'analyze_with_custom_model'):
@@ -191,12 +189,12 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                             else:
                                 sentiment_result = sentiment_analyzer.analyze_sentiment(content)
                             sentiment = sentiment_result["normalized_sentiment"]
-                            confidence = sentiment_result["score"]
+                            
                         cur.execute("""
-                        INSERT INTO post_summary 
-                        (post_id, ma_chung_khoan, cau_quan_trong, cam_xuc, confidence_score, timestamp, source)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """, (post_id_str, stock_code, important_sentence, sentiment, confidence, post_timestamp, source))
+                        INSERT INTO all_content 
+                        (timestamp, source, title, symbol, content, sentiment)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (post_timestamp, source, None, stock_code, important_sentence, sentiment))
                     
                     print(f"Processed: {post_id_str} - Stock: {stock_codes} - Multiple entries created")
                 
@@ -210,12 +208,20 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
                     conn.commit()
                     print(f"Committed {processed_count} posts")
                 
+            except psycopg2.errors.UniqueViolation:
+                print(f"Duplicate content for post {post_id_str} - skipping")
+                conn.rollback()
+                continue
             except Exception as e:
                 print(f"Error processing post {post_id}: {e}")
-                cur.execute("""
-                    INSERT INTO post_summary (post_id, ma_chung_khoan, cau_quan_trong, cam_xuc, timestamp, source)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (post_id_str, None, None, "TRUNG_TÍNH", post_timestamp, source))
+                try:
+                    cur.execute("""
+                        INSERT INTO all_content (timestamp, source, title, symbol, content, sentiment)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (post_timestamp, source, None, None, content, "TRUNG_TÍNH"))
+                except psycopg2.errors.UniqueViolation:
+                    print(f"Duplicate content for post {post_id_str} - skipping")
+                    conn.rollback()
                 continue
         
         conn.commit()
@@ -239,16 +245,17 @@ def process_posts_batch(batch_size=20, use_custom_model=False, source='facebook'
         cur.close()
         conn.close()
 
-def process_rumors_batch(batch_size=100, last_24h_only=False):
+def process_rumors_batch(batch_size=100, last_24h_only=False, use_trained_model=False):
     """
     Xử lý dữ liệu từ bảng rumor và chuyển sang rumor_analyst
     Chỉ viết lại nội dung, giữ nguyên các thông tin khác
     """
     from services.rumor_processor import RumorProcessor
     
-    print(f"Starting rumor processing (batch_size={batch_size}, last_24h={last_24h_only})...")
+    model_type = "TRAINED" if use_trained_model else "BASE"
+    print(f"Starting rumor processing with {model_type} model (batch_size={batch_size}, last_24h={last_24h_only})...")
     
-    rumor_processor = RumorProcessor()
+    rumor_processor = RumorProcessor(use_trained_model=use_trained_model)
     processed_count = rumor_processor.process_rumors_batch(
         batch_size=batch_size, 
         last_24h_only=last_24h_only
@@ -389,6 +396,35 @@ def retrain_sentiment_model():
         import traceback; traceback.print_exc()
         return False
 
+def retrain_rewriter_model():
+    """Huấn luyện mô hình viết lại rumor"""
+    try:
+        print("Starting rumor rewriter training...")
+        from training.train_rewriter_model import train_rumor_rewriter_model
+        success = train_rumor_rewriter_model()
+        if success:
+            print("✅ Rumor rewriter training completed successfully!")
+        else:
+            print("❌ Rumor rewriter training failed")
+        return success
+    except Exception as e:
+        print(f"❌ Training failed: {e}")
+        return False
+
+def evaluate_rewriter_model():
+    """Đánh giá mô hình viết lại rumor"""
+    try:
+        print("🔍 Evaluating rewriter model...")
+        from training.evaluate_rewriter import evaluate_rewriter_model as eval_func
+        results = eval_func()
+        if results:
+            print("✅ Rewriter model evaluation completed!")
+        else:
+            print("❌ Rewriter model evaluation failed")
+        return results
+    except Exception as e:
+        print(f"❌ Evaluation failed: {e}")
+        return False
 
 def evaluate_model():
     """Đánh giá mô hình đã huấn luyện"""
@@ -411,7 +447,7 @@ def evaluate_model():
         return False
 
 def calculate_daily_statistics():
-    """Tính toán thống kê hàng ngày từ post_summary"""
+    """Tính toán thống kê hàng ngày từ all_content"""
     conn = get_db_connection()
     cur = conn.cursor()
     
@@ -434,10 +470,10 @@ def calculate_daily_statistics():
         cur.execute("""
             SELECT 
                 COUNT(*) as total,
-                COUNT(CASE WHEN cam_xuc = 'TÍCH_CỰC' THEN 1 END) as total_positive,
-                COUNT(CASE WHEN cam_xuc = 'TIÊU_CỰC' THEN 1 END) as total_negative,
-                COUNT(CASE WHEN cam_xuc = 'TRUNG_TÍNH' THEN 1 END) as total_neutral
-            FROM post_summary 
+                COUNT(CASE WHEN sentiment = 'TÍCH_CỰC' THEN 1 END) as total_positive,
+                COUNT(CASE WHEN sentiment = 'TIÊU_CỰC' THEN 1 END) as total_negative,
+                COUNT(CASE WHEN sentiment = 'TRUNG_TÍNH' THEN 1 END) as total_neutral
+            FROM all_content 
             WHERE timestamp >= %s AND timestamp < %s
         """, (yesterday_start, today_start))
         
@@ -450,10 +486,15 @@ def calculate_daily_statistics():
         for source in sources:
             cur.execute("""
                 SELECT COUNT(*) 
-                FROM post_summary 
+                FROM all_content 
                 WHERE source = %s AND timestamp >= %s AND timestamp < %s
             """, (source, yesterday_start, today_start))
             source_counts[source] = cur.fetchone()[0] or 0
+        
+        # Tính aim_score (tỷ lệ tích cực)
+        total_posts = total_stats[0] or 1
+        positive_posts = total_stats[1] or 0
+        aim_score = (positive_posts / total_posts) * 100
         
         # Chèn dữ liệu thống kê vào bảng
         cur.execute("""
@@ -547,10 +588,11 @@ def get_recent_statistics(days=7):
     finally:
         cur.close()
         conn.close()
+
 def main():
     """Hàm main chạy một lần"""
     try:
-        create_summary_table()
+        create_all_content_table()
         create_reply_summary_table()
         create_news_statistics_table()
         create_rumor_analyst_table()
@@ -560,68 +602,19 @@ def main():
                 success = retrain_sentiment_model()
                 if success:
                     print("Retraining completed. You can now use the custom model with --use-custom")
-                return 0 if success else 1
-                
+                return 0 if success else 1             
             elif sys.argv[1] == "--evaluate":
                 success = evaluate_model()
                 return 0 if success else 1
-            elif sys.argv[1] == "--export-excel":
-                print("Exporting training data to Excel...")
-                from training.data_preparation import TrainingDataPreparer
-                
-                preparer = TrainingDataPreparer()
-                
-                # Xác định file paths
-                jsonl_file = "training_data_complete.jsonl"
-                excel_file = "training_data.xlsx"
-                
-                # Nếu có tham số thứ 2, dùng làm tên file output
-                if len(sys.argv) > 2:
-                    excel_file = sys.argv[2]
-                    if not excel_file.endswith('.xlsx'):
-                        excel_file += '.xlsx'
-                
-                # Kiểm tra file JSONL tồn tại
-                if not os.path.exists(jsonl_file):
-                    print(f"File {jsonl_file} không tồn tại. Đang tạo dataset mới...")
-                    preparer.create_training_dataset(jsonl_file)
-                
-                # Xuất sang Excel
-                success = preparer.export_to_excel(jsonl_file, excel_file)
-                return 0 if success else 1  
-            elif sys.argv[1] == "--use-custom":
-                print(f"\n{datetime.now()} - Starting batch processing with custom model...")
-                # Xử lý Facebook posts
-                processed_fb = process_posts_batch(batch_size=1000, use_custom_model=True, source='facebook')
-                # Xử lý YouTube posts
-                processed_yt = process_posts_batch(batch_size=1000, use_custom_model=True, source='youtube')
-                # Xử lý FireAnt posts
-                processed_fa = process_posts_batch(batch_size=1000, use_custom_model=True, source='fireant')
-                # Xử lý Zalo posts
-                processed_zalo = process_posts_batch(batch_size=1000, use_custom_model=True, source='zalo')
-                processed = processed_fb + processed_yt + processed_fa + processed_zalo
-            elif sys.argv[1] == "--youtube-only":
-                print(f"\n{datetime.now()} - Processing YouTube posts only...")
-                processed = process_posts_batch(batch_size=1000, source='youtube')
-            elif sys.argv[1] == "--fireant-only":
-                print(f"\n{datetime.now()} - Processing FireAnt posts only...")
-                processed = process_posts_batch(batch_size=1000, source='fireant')
-            elif sys.argv[1] == "--zalo-only":
-                print(f"\n{datetime.now()} - Processing Zalo posts only...")
-                processed = process_posts_batch(batch_size=1000, source='zalo')
-            elif sys.argv[1] == "--last-24h":
-                print(f"\n{datetime.now()} - Processing posts from last 24 hours with custom model...")
-                # Xử lý Facebook posts từ 24h qua
-                processed_fb = process_posts_batch(batch_size=1000, use_custom_model=True, source='facebook', last_24h_only=True)
-                # Xử lý YouTube posts từ 24h qua
-                processed_yt = process_posts_batch(batch_size=1000, use_custom_model=True, source='youtube', last_24h_only=True)
-                # Xử lý FireAnt posts từ 24h qua
-                processed_fa = process_posts_batch(batch_size=1000, use_custom_model=True, source='fireant', last_24h_only=True)
-                # Xử lý Zalo posts từ 24h qua
-                processed_zalo = process_posts_batch(batch_size=1000, use_custom_model=True, source='zalo', last_24h_only=True)
-                processed = processed_fb + processed_yt + processed_fa + processed_zalo
-            elif sys.argv[1] == "--process-rumors":
-                print(f"\n{datetime.now()} - Processing rumors (rewrite content only)...")
+            elif sys.argv[1] == "--retrain-rewriter":
+                success = retrain_rewriter_model()
+                return 0 if success else 1             
+            elif sys.argv[1] == "--evaluate-rewriter":
+                results = evaluate_rewriter_model()
+                return 0 if results else 1
+            elif sys.argv[1] == "--use-trained-rewriter":
+                print("🔄 Using trained rewriter model...")
+                # Xác định các tham số
                 last_24h = "--last-24h" in sys.argv
                 batch_size = 100
                 
@@ -635,24 +628,79 @@ def main():
                 
                 processed = process_rumors_batch(
                     batch_size=batch_size,
-                    last_24h_only=last_24h
+                    last_24h_only=last_24h,
+                    use_trained_model=True
                 )
-                print(f"Processed {processed} rumors")
+                print(f"✅ Processed {processed} rumors with TRAINED model")
                 return 0
+                
+            elif sys.argv[1] == "--process-rumors":
+                print("🔄 Processing rumors with base model...")
+                last_24h = "--last-24h" in sys.argv
+                batch_size = 100
+                
+                # Xác định batch size nếu có tham số
+                for arg in sys.argv:
+                    if arg.startswith("--batch-size="):
+                        try:
+                            batch_size = int(arg.split("=")[1])
+                        except:
+                            pass
+                
+                processed = process_rumors_batch(
+                    batch_size=batch_size,
+                    last_24h_only=last_24h,
+                    use_trained_model=False
+                )
+                print(f"✅ Processed {processed} rumors with BASE model")
+                return 0
+            elif sys.argv[1] == "--export-excel":
+                print("Exporting training data to Excel...")
+                from training.data_preparation import TrainingDataPreparer             
+                preparer = TrainingDataPreparer()             
+                jsonl_file = "training_data_complete.jsonl"
+                excel_file = "training_data.xlsx"
+                if len(sys.argv) > 2:
+                    excel_file = sys.argv[2]
+                    if not excel_file.endswith('.xlsx'):
+                        excel_file += '.xlsx'              
+                if not os.path.exists(jsonl_file):
+                    print(f"File {jsonl_file} không tồn tại. Đang tạo dataset mới...")
+                    preparer.create_training_dataset(jsonl_file)
+                success = preparer.export_to_excel(jsonl_file, excel_file)
+                return 0 if success else 1  
+            elif sys.argv[1] == "--use-custom":
+                print(f"\n{datetime.now()} - Starting batch processing with custom model...")
+                processed_fb = process_posts_batch(batch_size=1000, use_custom_model=True, source='facebook')
+                processed_yt = process_posts_batch(batch_size=1000, use_custom_model=True, source='youtube')
+                processed_fa = process_posts_batch(batch_size=1000, use_custom_model=True, source='fireant')
+                processed_zalo = process_posts_batch(batch_size=1000, use_custom_model=True, source='zalo')
+                processed = processed_fb + processed_yt + processed_fa + processed_zalo
+            elif sys.argv[1] == "--youtube-only":
+                print(f"\n{datetime.now()} - Processing YouTube posts only...")
+                processed = process_posts_batch(batch_size=1000, source='youtube')
+            elif sys.argv[1] == "--fireant-only":
+                print(f"\n{datetime.now()} - Processing FireAnt posts only...")
+                processed = process_posts_batch(batch_size=1000, source='fireant')
+            elif sys.argv[1] == "--zalo-only":
+                print(f"\n{datetime.now()} - Processing Zalo posts only...")
+                processed = process_posts_batch(batch_size=1000, source='zalo')
+            elif sys.argv[1] == "--last-24h":
+                print(f"\n{datetime.now()} - Processing posts from last 24 hours with custom model...")
+                processed_fb = process_posts_batch(batch_size=1000, use_custom_model=True, source='facebook', last_24h_only=True)
+                processed_yt = process_posts_batch(batch_size=1000, use_custom_model=True, source='youtube', last_24h_only=True)
+                processed_fa = process_posts_batch(batch_size=1000, use_custom_model=True, source='fireant', last_24h_only=True)
+                processed_zalo = process_posts_batch(batch_size=1000, use_custom_model=True, source='zalo', last_24h_only=True)
+                processed = processed_fb + processed_yt + processed_fa + processed_zalo
             else:
                 print(f"Unknown argument: {sys.argv[1]}")
                 print("Usage: python main.py [--retrain | --evaluate | --use-custom | --youtube-only | --fireant-only | --zalo-only | --last-24h | --stats [days]]")
                 return 1
         else:
-            # Chế độ mặc định: xử lý với model gốc
             print(f"\n{datetime.now()} - Starting batch processing with default model...")
-            # Xử lý Facebook posts
             processed_fb = process_posts_batch(batch_size=1000, source='facebook')
-            # Xử lý YouTube posts
             processed_yt = process_posts_batch(batch_size=1000, source='youtube')
-            # Xử lý FireAnt posts
             processed_fa = process_posts_batch(batch_size=1000, source='fireant')
-            # Xử lý Zalo posts
             processed_zalo = process_posts_batch(batch_size=1000, source='zalo')
             processed = processed_fb + processed_yt + processed_fa + processed_zalo
         
@@ -672,6 +720,5 @@ def main():
     return 0
 
 if __name__ == "__main__":
-    # Tạo thư mục training nếu chưa tồn tại
     os.makedirs('training', exist_ok=True)
     main()

@@ -1,7 +1,7 @@
 import psycopg2
 from config.database import get_db_connection
 
-def create_summary_table():
+def create_all_content_table():
     conn = get_db_connection()
     cur = conn.cursor()
     
@@ -9,7 +9,7 @@ def create_summary_table():
         cur.execute("""
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
-                WHERE table_name = 'post_summary'
+                WHERE table_name = 'all_content'
             )
         """)
         
@@ -17,43 +17,32 @@ def create_summary_table():
         
         if not table_exists:
             create_table_query = """
-            CREATE TABLE post_summary (
+            CREATE TABLE all_content (
                 id SERIAL PRIMARY KEY,
-                post_id VARCHAR(50) NOT NULL,
-                ma_chung_khoan VARCHAR(10),
-                cau_quan_trong TEXT,
-                confidence_score FLOAT DEFAULT 0.5,
-                cam_xuc VARCHAR(20),
-                timestamp BIGINT,
-                source VARCHAR(20) DEFAULT 'facebook'
+                timestamp BIGINT NOT NULL,
+                source TEXT NOT NULL,
+                title TEXT,
+                symbol TEXT,
+                content TEXT NOT NULL,
+                sentiment TEXT,
+                UNIQUE(timestamp, content)
             )
             """
             cur.execute(create_table_query)
             
-            cur.execute("CREATE INDEX idx_post_summary_post_id ON post_summary(post_id)")
-            cur.execute("CREATE INDEX idx_post_summary_ma_chung_khoan ON post_summary(ma_chung_khoan)")
-            cur.execute("CREATE INDEX idx_post_summary_cam_xuc ON post_summary(cam_xuc)")
-            cur.execute("CREATE INDEX idx_post_summary_timestamp ON post_summary(timestamp)")
-            cur.execute("CREATE INDEX idx_post_summary_source ON post_summary(source)")
+            # Tạo indexes cho bảng mới
+            cur.execute("CREATE INDEX idx_all_content_timestamp ON all_content(timestamp)")
+            cur.execute("CREATE INDEX idx_all_content_source ON all_content(source)")
+            cur.execute("CREATE INDEX idx_all_content_symbol ON all_content(symbol)")
+            cur.execute("CREATE INDEX idx_all_content_sentiment ON all_content(sentiment)")
             
             conn.commit()
-            print("post_summary table created successfully!")
+            print("all_content table created successfully!")
         else:
-            try:
-                # Thêm cột source nếu chưa có
-                cur.execute("ALTER TABLE post_summary ADD COLUMN source VARCHAR(20) DEFAULT 'facebook'")
-                cur.execute("CREATE INDEX IF NOT EXISTS idx_post_summary_source ON post_summary(source)")
-                conn.commit()
-                print("Added source column to post_summary table")
-            except psycopg2.errors.DuplicateColumn:
-                print("source column already exists")
-                conn.rollback()
+            print("all_content table already exists")
             
-    except psycopg2.errors.DuplicateTable:
-        print("post_summary table already exists - continuing")
-        conn.rollback()
     except Exception as e:
-        print(f"Error in create_summary_table: {e}")
+        print(f"Error in create_all_content_table: {e}")
         conn.rollback()
     finally:
         cur.close()
