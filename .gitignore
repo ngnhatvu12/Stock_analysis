@@ -3,4 +3,4 @@
 training_data_complete.jsonl
 trained_sentiment_model_complete/
 trained_rewriter_model/
-training_data/
+training_data/trained_rewriter_model/
